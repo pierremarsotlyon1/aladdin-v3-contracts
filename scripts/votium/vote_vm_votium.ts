@@ -202,6 +202,7 @@ interface LagrangeInput {
   xi: number;
   xiPositive: number;
   weight: number;
+  choiceIndex: number;
 }
 
 async function compute(
@@ -212,7 +213,7 @@ async function compute(
   incentives: Incentive[],
   votes: ISnapshotVotes[],
   roundData: IVotemarketBribe
-): Promise<Array<number>> {
+): Promise<LagrangeInput[]> {
 
   const {data: {data: curveApiResp}} = await axios.get(`https://api.curve.fi/api/getAllGauges`);
   const allGauges = Object.values(curveApiResp);
@@ -386,6 +387,7 @@ async function compute(
       xi:-1,
       xiPositive: -1,
       gaugeAddress: input.gaugeAddress,
+      choiceIndex: input.choiceIndex,
     })
   })
 
@@ -448,7 +450,7 @@ async function compute(
   //console.log(lagrangeDatas);
   fs.writeFileSync("./lagrangeDatas.json", JSON.stringify(lagrangeDatas.reverse()), {encoding: 'utf-8'});
   // 0xa5Dc66685bD13A0924505807c29F8C65dDa0d207
-  return new Array<number>(0);
+  return lagrangeDatas.filter((lagrange) => lagrange.weight > 0);
 }
 
 async function snapshot_vote(
@@ -568,12 +570,11 @@ async function snapshot_vote(
     }
 
     if (voter) {
-      const finalWeights = await compute(voter, holderVotes, minProfitUSD, proposal, bribes, votes, roundData);
+      const results = await compute(voter, holderVotes, minProfitUSD, proposal, bribes, votes, roundData);
       const choices: { [index: string]: number } = {};
-      finalWeights.forEach((weight, index) => {
-        if (weight > 0) {
-          choices[(index + 1).toString()] = weight;
-        }
+      results.forEach((result) => {
+          choices[result.choiceIndex.toString()] = result.weight;
+        
       });
       console.log("Vote choices:", choices);
       if (voteConfig) {
