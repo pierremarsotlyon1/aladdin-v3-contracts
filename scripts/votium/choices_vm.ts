@@ -140,6 +140,7 @@ interface Incentive {
   blacklistedAddresses: `0x${string}`[];
   remainingWeek: number;
   platforms: ('convex' | 'votemarket')[];
+  timestampPeriod: number
 }
 
 type IVotemarketBribeResponse = Record<string, IVotemarketBribe>;
@@ -179,6 +180,7 @@ async function fetchVotes(proposalId: string, users: number): Promise<ISnapshotV
 }
 
 interface Input {
+  gaugeName: string;
   gaugeAddress: `0x${string}`;
   platform: 'votium' | 'votemarket';
   remainingDuration: number;
@@ -188,17 +190,17 @@ interface Input {
   currentCvxSnapshotVotes: number;
   voterCvxCurrentVotes: number;
   choiceIndex: number;
+  timestampPeriod: number;
+  earnings: number;
 }
 
 interface LagrangeInput {
+  gaugeName: string;
   gaugeAddress: `0x${string}`;
   bi: number;
-  vi: number;
   si: number;
   sqrt: number;
   xi: number;
-  xiPositive: number;
-  weight: number;
   choiceIndex: number;
 }
 
@@ -221,15 +223,13 @@ async function compute(
   // Fetch inputs
   const publicClient = createPublicClient({
     chain: mainnet,
-    transport: http(),
+    transport: http("https://lb.drpc.org/ogrpc?network=ethereum&dkey=Ak80gSCleU1Frwnafb5Ka4W15CoRE1QR77g0svbGyHm5"),
     batch: {
       multicall: true
     }
   });
 
   // Voter votes availables
-  const hub = "https://hub.snapshot.org";
-  const client = new snapshot.Client712(hub);
   const fetchedVp = await snapshot.utils.getScores(
     "cvx.eth",
     proposal.strategies,
@@ -247,77 +247,49 @@ async function compute(
 
   // Current non blacklisted veCRV votes / convex current vote
   const results = await publicClient.multicall({
-    contracts: [
-      {
-        address: VE_CRV,
-        abi: gcAbi,
-        functionName: "totalSupply",
-        args: []
-      },
-      ...incentives.map((incentive) => {
-        return [
-          {
-            address: CRV_GAUGE_CONTROLLER,
-            abi: gcAbi,
-            functionName: "gauge_relative_weight",
-            args: [incentive.gaugeAddress]
-          },
-          {
-            address: CRV_GAUGE_CONTROLLER,
-            abi: gcAbi,
-            functionName: "vote_user_slopes",
-            args: [CONVEX_VOTER, incentive.gaugeAddress]
-          },
-          {
-            address: CRV_GAUGE_CONTROLLER,
-            abi: gcAbi,
-            functionName: "vote_user_slopes",
-            args: [voter, incentive.gaugeAddress]
-          },
-          ...incentive.blacklistedAddresses.map((blacklistedAddress) => ({
-            address: CRV_GAUGE_CONTROLLER,
-            abi: gcAbi,
-            functionName: "vote_user_slopes",
-            args: [blacklistedAddress, incentive.gaugeAddress]
-          }))
-        ]
-      })
-        .flat()
-    ]
+    contracts: incentives.map((incentive) => {
+      return [
+        {
+          address: CRV_GAUGE_CONTROLLER,
+          abi: gcAbi,
+          functionName: "get_gauge_weight",
+          args: [incentive.gaugeAddress]
+        },
+        {
+          address: CRV_GAUGE_CONTROLLER,
+          abi: gcAbi,
+          functionName: "vote_user_slopes",
+          args: [CONVEX_VOTER, incentive.gaugeAddress]
+        },
+        ...incentive.blacklistedAddresses.map((blacklistedAddress) => ({
+          address: CRV_GAUGE_CONTROLLER,
+          abi: gcAbi,
+          functionName: "vote_user_slopes",
+          args: [blacklistedAddress, incentive.gaugeAddress]
+        }))
+      ]
+    })
+      .flat(),
   });
 
   // Decode and create inputs
   const inputs: Input[] = [];
 
-  let veCRVTotalSupply = 0;
-  const veCRVRes = results.shift() as any;
-  if(veCRVRes.result) {
-    veCRVTotalSupply = parseFloat(formatUnits(veCRVRes.result as bigint, 18));
-  }
   for(const incentive of incentives) {
     const relativeWeightResp = results.shift() as any;
     const convexSlope = results.shift() as any;
-    const voterSlope = results.shift() as any;
 
     let relativeWeight = 0;
     let convexVote = 0;
-    let voterVote = 0;
 
     if (relativeWeightResp.result) {
-      relativeWeight = veCRVTotalSupply
-        * parseFloat(formatUnits(BigInt(relativeWeightResp.result as any), 18));
+      relativeWeight = parseFloat(formatUnits(BigInt(relativeWeightResp.result as any), 18))
     }
 
     if(convexSlope.result) {
       const slope = convexSlope.result[0];
       const end = convexSlope.result[2];
       convexVote = parseFloat(formatUnits(BigInt(slope * (end - BigInt(period))), 18));
-    }
-
-    if(voterSlope.result) {
-      const slope = voterSlope.result[0];
-      const end = voterSlope.result[2];
-      voterVote = parseFloat(formatUnits(BigInt(slope * (end - BigInt(period))), 18));
     }
 
     // Blacklist
@@ -330,24 +302,24 @@ async function compute(
       }
     });
 
+    // Get shortName associated from curve api
+    const shortName = (allGauges.find((gaugeData: any) =>
+      gaugeData.gauge.toLowerCase() === incentive.gaugeAddress.toLowerCase()
+      || gaugeData.swap?.toLowerCase() === incentive.gaugeAddress.toLowerCase()
+    ) as any)?.shortName || undefined;
+    if (shortName === undefined) {
+      console.log("error", incentive.gaugeAddress)
+      continue;
+    }
+
     let currentCvxSnapshotVotes = 0;
     let choiceIndex = 0;
-    for(let i = 0; i < proposal.choices.length; i++) {
+    for (let i = 0; i < proposal.choices.length; i++) {
       const choice = proposal.choices[i];
-      
-      // Get shortName associated from curve api
-      const shortName = (allGauges.find((gaugeData: any) => 
-        gaugeData.gauge.toLowerCase() === incentive.gaugeAddress.toLowerCase()
-      || gaugeData.swap?.toLowerCase() === incentive.gaugeAddress.toLowerCase()
-    ) as any)?.shortName	|| undefined;
-      if(shortName === undefined) {
-        console.log("error", incentive.gaugeAddress)
-        continue;
-      }
 
-      if(choice.toLowerCase().startsWith(shortName.toLowerCase())) {
+      if (choice.toLowerCase().startsWith(shortName.toLowerCase())) {
         currentCvxSnapshotVotes = proposal.scores[i];
-        choiceIndex = i+1;
+        choiceIndex = i + 1;
         break;
       }
     }
@@ -360,6 +332,7 @@ async function compute(
     }
 
     inputs.push({
+      gaugeName: incentive.gaugeName,
       gaugeAddress: incentive.gaugeAddress,
       remainingDuration: incentive.remainingWeek,
       depositedRewardsUSD: incentive.amountDepositedUSD,
@@ -368,7 +341,9 @@ async function compute(
       currentCvxSnapshotVotes,
       currentNonBlacklistedVeCrvVotes: relativeWeight,
       voterCvxCurrentVotes,
-      choiceIndex
+      choiceIndex,
+      timestampPeriod: incentive.timestampPeriod || 0,
+      earnings: 0
     });
   }
 
@@ -377,12 +352,10 @@ async function compute(
   inputs.forEach((input) => {
     lagrangeDatas.push({
       bi: -1,
-      vi: -1,
       si: -1,
       sqrt: -1,
-      weight: -1,
       xi:-1,
-      xiPositive: -1,
+      gaugeName: input.gaugeName,
       gaugeAddress: input.gaugeAddress,
       choiceIndex: input.choiceIndex,
     })
@@ -390,64 +363,103 @@ async function compute(
 
   fs.writeFileSync("./inputs.json", JSON.stringify(inputs), {encoding: 'utf-8'});
 
-  for (let h = 0; h < 15; h++) {
+  const totalVotesSum = inputs.reduce((acc: number, input) => acc + input.voterCvxCurrentVotes, 0);
+  console.log("totalVotesSum", totalVotesSum)
+  for (let h = 0; h < 4; h++) {
     const isFirstIteration = h === 0;
 
     for (let a = 0; a < inputs.length; a++) {
       const input = inputs[a];
       const lagrangeData = lagrangeDatas[a];
 
+      let depositedRewardsUSD = 0;
+      if (input.platform === 'votium') {
+        depositedRewardsUSD = input.depositedRewardsUSD;
+      } else {
+        depositedRewardsUSD = input.depositedRewardsUSD * Math.min(2, input.remainingDuration);
+      }
       if(isFirstIteration) {
         // If first iteration, we compute wil inputs data bi, vi, si
         if (input.platform === 'votium') {
-          lagrangeData.bi = input.depositedRewardsUSD;
-          lagrangeData.vi = input.currentCvxSnapshotVotes;
+          lagrangeData.bi = depositedRewardsUSD;
+          lagrangeData.si = input.currentCvxSnapshotVotes - input.voterCvxCurrentVotes;
         } else {
-          lagrangeData.bi = input.depositedRewardsUSD * Math.min(2, input.remainingDuration);
-          lagrangeData.vi =
+          lagrangeData.bi = depositedRewardsUSD;
+          lagrangeData.si =
             (Math.max(input.currentNonBlacklistedVeCrvVotes - input.currentConvexVeCrvVotes, 0)
               / roundData.crvPerCvx)
-            + input.currentCvxSnapshotVotes;
+            + input.currentCvxSnapshotVotes
+            - input.voterCvxCurrentVotes;
         }
-
-        lagrangeData.si = input.voterCvxCurrentVotes
       } else {
-        // Else use previous iteration to compute new vi / si. bi will never change
-        lagrangeData.vi = lagrangeData.vi + lagrangeData.weight - lagrangeData.si;
-        lagrangeData.si = lagrangeData.weight;
+        lagrangeData.bi = lagrangeData.xi > 0 ? lagrangeData.bi : 0;
+        lagrangeData.si = lagrangeData.xi > 0 ? lagrangeData.si : 0;
       }
-      
-      lagrangeData.sqrt = Math.sqrt(lagrangeData.bi * lagrangeData.vi);
+
+      lagrangeData.sqrt = Math.sqrt(lagrangeData.bi * lagrangeData.si);
     }
 
-    const sumVis = lagrangeDatas.reduce((acc: number, lagrangeData) => acc + lagrangeData.vi, 0);
+    const sumSi = lagrangeDatas.reduce((acc: number, lagrangeData) => acc + lagrangeData.si, 0);
     const sumSqrt = lagrangeDatas.reduce((acc: number, lagrangeData) => acc + lagrangeData.sqrt, 0);
-
+    console.log("sumSi", sumSi)
+    console.log("sumSqrt", sumSqrt)
+    console.log("-----")
     for (let a = 0; a < inputs.length; a++) {
       const lagrangeData = lagrangeDatas[a];
+      if(isFirstIteration && inputs[a].gaugeAddress === "0xd03BE91b1932715709e18021734fcB91BB431715" && lagrangeData.bi > 1) {
+        console.log("sumSi", sumSi)
+        console.log("totalVotesSum", totalVotesSum)
+        console.log("lagrangeData.sqrt", lagrangeData.sqrt)
+        console.log("sumSqrt", sumSqrt)
+        console.log("lagrangeData.si", lagrangeData.si)
+      }
+      lagrangeData.xi = (((sumSi + totalVotesSum) * lagrangeData.sqrt) / sumSqrt) - lagrangeData.si;
+    }
+    //fs.writeFileSync(`./.store/vlcvx/lagrangeDatas/lagrangeData-${h}.json`, JSON.stringify(lagrangeDatas.sort((a, b) => b.si - a.si)), {encoding: 'utf-8'});
+  }
 
-      lagrangeData.xi =
-        (lagrangeData.si + sumVis)
-        * Math.sqrt(lagrangeData.bi * lagrangeData.vi)
-        / sumSqrt
-        - lagrangeData.vi;
-      lagrangeData.xiPositive = Math.max(0, lagrangeData.xi);
+  // Calculate earnings
+  for (let i = 0; i < lagrangeDatas.length; i++) {
+    const lagrangeData = lagrangeDatas[i];
+    const input = inputs[i];
+
+    const currentSnapshotVotes = (proposal.scores[input.choiceIndex - 1] || 0);
+    const totalVlCvxVotes = currentSnapshotVotes - input.voterCvxCurrentVotes + lagrangeData.xi
+    const totalVecrvVotes = input.currentNonBlacklistedVeCrvVotes - input.currentConvexVeCrvVotes + totalVlCvxVotes * roundData.crvPerCvx;
+    let bribeRewardsUSD = 0;
+    if (input.platform === "votium") {
+      bribeRewardsUSD = input.depositedRewardsUSD;
+    } else {
+      bribeRewardsUSD = Math.min(2, input.remainingDuration) * input.depositedRewardsUSD;
     }
 
-    const sumXiPositive = lagrangeDatas.reduce((acc: number, lagrangeData) => acc + lagrangeData.xiPositive, 0);
+    const usdPervecrv = totalVecrvVotes === 0 ? 0 : Math.min(bribeRewardsUSD / totalVecrvVotes, 1);
+    const usdPerVlCvx = usdPervecrv * roundData.crvPerCvx;
+    input.earnings += usdPerVlCvx * lagrangeData.xi;
 
-    for (let a = 0; a < inputs.length; a++) {
-      const lagrangeData = lagrangeDatas[a];
-
-      lagrangeData.weight = lagrangeData.xiPositive / sumXiPositive * voterVotingPower;
+    if(input.gaugeAddress === "0x740BA8aa0052E07b925908B380248cb03f3DE5cB") {
+      console.log(input.gaugeName)
+      console.log(currentSnapshotVotes)
+      console.log(totalVlCvxVotes)
+      console.log(totalVecrvVotes)
+      console.log(bribeRewardsUSD)
+      console.log(usdPervecrv)
+      console.log(usdPerVlCvx)
+      console.log(lagrangeData.xi)
+      console.log(usdPerVlCvx * lagrangeData.xi)
+      console.log(lagrangeData)
+      console.log("------")
     }
   }
 
-  lagrangeDatas.sort((a, b) => a.weight - b.weight);
-  //console.log(lagrangeDatas);
-  fs.writeFileSync("./lagrangeDatas.json", JSON.stringify(lagrangeDatas.reverse()), {encoding: 'utf-8'});
-  // 0xa5Dc66685bD13A0924505807c29F8C65dDa0d207
-  return lagrangeDatas.filter((lagrange) => lagrange.weight > 0);
+  lagrangeDatas.sort((a, b) => a.xi - b.xi);
+  
+  fs.writeFileSync("./inputs.json", JSON.stringify(inputs), {encoding: 'utf-8'});
+
+  const totalEarnings = inputs.reduce((acc: number, i) => acc + i.earnings, 0)
+  console.log("totalEarnings", totalEarnings)
+  fs.writeFileSync("./lagrangeDatas.json", JSON.stringify(lagrangeDatas.reverse().map((l) => ({weight: l.xi, name: l.gaugeName, gauge: l.gaugeAddress}))), {encoding: 'utf-8'});
+  return lagrangeDatas.filter((lagrange) => lagrange.xi > 0);
 }
 
 export async function get_choices_with_votemarket(
@@ -472,14 +484,16 @@ export async function get_choices_with_votemarket(
   if (voteConfig) force = true;
 
   // Fetch votemarket analytics
-  const { data: response } = await axios.get<IVotemarketBribeResponse>(
+  /*const { data: response } = await axios.get<IVotemarketBribeResponse>(
     `https://raw.githubusercontent.com/stake-dao/votemarket-analytics/refs/heads/main/analytics/votemarket-vlcvx-analytics.json`,
     {
       headers: {
         "content-type": "application/json; charset=utf-8",
       },
     }
-  );
+  );*/
+
+  const response =  JSON.parse(fs.readFileSync(`${directory}/${protocol}/vlcvx.json`).toString()) as any;
 
   const roundData = response[round];
   assert.ok(roundData !== undefined, "round mismatch");
@@ -562,7 +576,7 @@ export async function get_choices_with_votemarket(
     const results = await compute(voter, holderVotes, minProfitUSD, proposal, bribes, votes, roundData);
     const choices: { [index: string]: number } = {};
     results.forEach((result) => {
-      choices[result.choiceIndex.toString()] = result.weight;
+      choices[result.choiceIndex.toString()] = result.xi;
     });
     return {proposalId, choices}
   }
