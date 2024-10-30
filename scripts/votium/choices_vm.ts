@@ -223,7 +223,7 @@ async function compute(
   // Fetch inputs
   const publicClient = createPublicClient({
     chain: mainnet,
-    transport: http("https://lb.drpc.org/ogrpc?network=ethereum&dkey=Ak80gSCleU1Frwnafb5Ka4W15CoRE1QR77g0svbGyHm5"),
+    transport: http(),
     batch: {
       multicall: true
     }
@@ -364,7 +364,6 @@ async function compute(
   fs.writeFileSync("./inputs.json", JSON.stringify(inputs), {encoding: 'utf-8'});
 
   const totalVotesSum = inputs.reduce((acc: number, input) => acc + input.voterCvxCurrentVotes, 0);
-  console.log("totalVotesSum", totalVotesSum)
   for (let h = 0; h < 4; h++) {
     const isFirstIteration = h === 0;
 
@@ -401,18 +400,9 @@ async function compute(
 
     const sumSi = lagrangeDatas.reduce((acc: number, lagrangeData) => acc + lagrangeData.si, 0);
     const sumSqrt = lagrangeDatas.reduce((acc: number, lagrangeData) => acc + lagrangeData.sqrt, 0);
-    console.log("sumSi", sumSi)
-    console.log("sumSqrt", sumSqrt)
-    console.log("-----")
+
     for (let a = 0; a < inputs.length; a++) {
       const lagrangeData = lagrangeDatas[a];
-      if(isFirstIteration && inputs[a].gaugeAddress === "0xd03BE91b1932715709e18021734fcB91BB431715" && lagrangeData.bi > 1) {
-        console.log("sumSi", sumSi)
-        console.log("totalVotesSum", totalVotesSum)
-        console.log("lagrangeData.sqrt", lagrangeData.sqrt)
-        console.log("sumSqrt", sumSqrt)
-        console.log("lagrangeData.si", lagrangeData.si)
-      }
       lagrangeData.xi = (((sumSi + totalVotesSum) * lagrangeData.sqrt) / sumSqrt) - lagrangeData.si;
     }
     //fs.writeFileSync(`./.store/vlcvx/lagrangeDatas/lagrangeData-${h}.json`, JSON.stringify(lagrangeDatas.sort((a, b) => b.si - a.si)), {encoding: 'utf-8'});
@@ -436,20 +426,6 @@ async function compute(
     const usdPervecrv = totalVecrvVotes === 0 ? 0 : Math.min(bribeRewardsUSD / totalVecrvVotes, 1);
     const usdPerVlCvx = usdPervecrv * roundData.crvPerCvx;
     input.earnings += usdPerVlCvx * lagrangeData.xi;
-
-    if(input.gaugeAddress === "0x740BA8aa0052E07b925908B380248cb03f3DE5cB") {
-      console.log(input.gaugeName)
-      console.log(currentSnapshotVotes)
-      console.log(totalVlCvxVotes)
-      console.log(totalVecrvVotes)
-      console.log(bribeRewardsUSD)
-      console.log(usdPervecrv)
-      console.log(usdPerVlCvx)
-      console.log(lagrangeData.xi)
-      console.log(usdPerVlCvx * lagrangeData.xi)
-      console.log(lagrangeData)
-      console.log("------")
-    }
   }
 
   lagrangeDatas.sort((a, b) => a.xi - b.xi);
