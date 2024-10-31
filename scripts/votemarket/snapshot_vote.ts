@@ -309,7 +309,7 @@ export async function get_choices_with_votemarket(
 
   // Fetch votemarket analytics
   const { data: response } = await axios.get<Record<string, any>>(
-    `https://raw.githubusercontent.com/stake-dao/votemarket-analytics/refs/heads/main/analytics/votemarket-vlcvx-analytics.json`,
+    `https://raw.githubusercontent.com/stake-dao/votemarket-analytics/refs/heads/main/analytics/votemarket-analytics-vlcvx.json`,
     {
       headers: {
         "content-type": "application/json; charset=utf-8",
