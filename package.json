@@ -6,7 +6,7 @@
   "scripts": {
     "test": "npx hardhat test",
     "build": "npx hardhat compile --no-typechain && npx hardhat typechain",
-    "vlcvx:crv": "yarn ts-node scripts/votium/vote.ts snapshot --protocol CRV --round 81 --voter 0x96C68D861aDa016Ed98c30C810879F9df7c64154",
+    "vlcvx:crv": "yarn ts-node scripts/votemarket/vote.ts snapshot --protocol CRV --round 82 --voter 0x96C68D861aDa016Ed98c30C810879F9df7c64154",
     "vlcvx:fxn": "yarn ts-node scripts/votium/vote.ts snapshot --protocol FXN",
     "vlcvx:prisma": "yarn ts-node scripts/votium/vote.ts snapshot --protocol PRISMA",
     "paladin:harvest:crv": "env HARDHAT_NETWORK=mainnet yarn ts-node scripts/paladin/harvest-paladin.ts --market crv --periods",

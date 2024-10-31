@@ -7,11 +7,13 @@ import assert from "assert";
 import snapshot from "@snapshot-labs/snapshot.js";
 import { createPublicClient, formatUnits, http, parseAbi } from 'viem';
 import { mainnet } from 'viem/chains';
+import { ISnapshotProposal, ISnapshotProposalResponse, ISnapshotVotes } from "scripts/interfaces/snapshot";
+import { Incentive, IVotemarketBribe } from "scripts/interfaces/votemarket";
+import { fetchVotes } from "scripts/snapshot/snapshotVotes";
 
 const directory = ".store/vlcvx";
 const CRV_GAUGE_CONTROLLER = "0x2F50D538606Fa9EDD2B11E2446BEb18C9D5846bB" as `0x${string}`;
 const CONVEX_VOTER = "0x989AEb4d175e16225E39E87d0D97A3360524AD80" as `0x${string}`;
-const VE_CRV = "0x5f3b5DfEb7B28CDbD7FAba78963EE202a494e2A2" as `0x${string}`;
 const gcAbi = parseAbi([
   'function gauge_relative_weight(address gauge) external view returns(uint256)',
   'function get_gauge_weight(address gauge) external view returns(uint256)',
@@ -20,164 +22,6 @@ const gcAbi = parseAbi([
 ]);
 const program = new Command();
 program.version("1.0.0");
-
-export declare type ProposalType = "single-choice" | "approval" | "quadratic" | "ranked-choice" | "weighted" | "basic";
-
-interface ISnapshotVote {
-  from?: string;
-  space: string;
-  timestamp?: number;
-  proposal: string;
-  type: ProposalType;
-  choice:
-    | number
-    | number[]
-    | string
-    | {
-        [key: string]: number;
-      };
-  privacy?: string;
-  reason?: string;
-  app?: string;
-  metadata?: string;
-}
-
-interface ISnapshotProposal {
-  author: string;
-  body: string;
-  choices: string[];
-  created: number;
-  discussion: string;
-  end: number;
-  id: string;
-  ipfs: string;
-  network: string;
-  plugins: {};
-  privacy: string;
-  quorum: number;
-  scores: number[];
-  scores_by_strategy: number[][];
-  scores_state: string;
-  scores_total: number;
-  snapshot: string;
-  space: {
-    id: string;
-    name: string;
-  };
-  start: number;
-  state: string;
-  strategies: {
-    name: string;
-    network: string;
-    params: {
-      symbol: string;
-      address: string;
-      decimals: number;
-    };
-  }[];
-  symbol: string;
-  title: string;
-  type: string;
-  validation: {
-    name: string;
-    params: {};
-  };
-  votes: number;
-}
-
-interface ISnapshotProposalResponse {
-  data: {
-    proposal: ISnapshotProposal;
-  };
-}
-
-interface ISnapshotVotes {
-  choice: { [id: number]: number };
-  created: number;
-  ipfs: string;
-  reason: string;
-  voter: string;
-  vp: number;
-  vp_by_strategy: number[];
-}
-
-interface ISnapshotVotesResponse {
-  data: {
-    votes: ISnapshotVotes[];
-  };
-}
-
-interface IVotiumBribe {
-  platform: string;
-  proposal: string;
-  protocol: string;
-  round: number;
-  end: number;
-  bribes: {
-    amount: number;
-    amountDollars: number;
-    pool: string;
-    token: string;
-  }[];
-  bribed: { [pool: string]: number };
-}
-
-interface IVotemarketBribe {
-  snapshotProposalId: string;
-  startRoundTimestamp: number;
-  endRoundTimestamp: number;
-  crvPerCvx: number;
-  vlCVXSupply: number;
-  veCrvHeldByConvex: number;
-  totalDepositedUSD: number;
-  incentives: Incentive[];
-}
-
-interface Incentive {
-  gaugeName: string;
-  gaugeAddress: `0x${string}`;
-  amountDepositedUSD: number;
-  blacklistedAddresses: `0x${string}`[];
-  remainingWeek: number;
-  platforms: ('convex' | 'votemarket')[];
-  timestampPeriod: number
-}
-
-type IVotemarketBribeResponse = Record<string, IVotemarketBribe>;
-
-function delay(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchVotes(proposalId: string, users: number): Promise<ISnapshotVotes[]> {
-  const batchSize = 100;
-  const votes: ISnapshotVotes[] = [];
-  for (let skip = 0; skip < users; skip += batchSize) {
-    const response = await axios.post<ISnapshotVotesResponse>(
-      "https://hub.snapshot.org/graphql",
-      JSON.stringify({
-        operationName: "Votes",
-        variables: {
-          first: batchSize,
-          orderBy: "vp",
-          orderDirection: "desc",
-          skip,
-          id: proposalId,
-        },
-        query:
-          "query Votes($id: String!, $first: Int, $skip: Int, $orderBy: String, $orderDirection: OrderDirection, $voter: String, $space: String) {\n  votes(\n    first: $first\n    skip: $skip\n    where: {proposal: $id, vp_gt: 0, voter: $voter, space: $space}\n    orderBy: $orderBy\n    orderDirection: $orderDirection\n  ) {\n    ipfs\n    voter\n    choice\n    vp\n    vp_by_strategy\n    reason\n    created\n  }\n}",
-      }),
-      {
-        headers: {
-          "content-type": "application/json",
-        },
-      }
-    );
-    votes.push(...response.data.data.votes);
-  }
-
-  return votes;
-}
 
 interface Input {
   gaugeName: string;
@@ -213,7 +57,6 @@ async function compute(
   votes: ISnapshotVotes[],
   roundData: IVotemarketBribe
 ): Promise<LagrangeInput[]> {
-
   const {data: {data: curveApiResp}} = await axios.get(`https://api.curve.fi/api/getAllGauges`);
   const allGauges = Object.values(curveApiResp);
 
@@ -404,28 +247,17 @@ async function compute(
     for (let a = 0; a < inputs.length; a++) {
       const lagrangeData = lagrangeDatas[a];
       lagrangeData.xi = (((sumSi + totalVotesSum) * lagrangeData.sqrt) / sumSqrt) - lagrangeData.si;
+
+      // If profit < min profit => remove bribe
+      if(getProfit(inputs[a], lagrangeData, proposal, roundData) < minProfitUSD) {
+        lagrangeData.xi = 0;
+      }
     }
-    //fs.writeFileSync(`./.store/vlcvx/lagrangeDatas/lagrangeData-${h}.json`, JSON.stringify(lagrangeDatas.sort((a, b) => b.si - a.si)), {encoding: 'utf-8'});
   }
 
   // Calculate earnings
   for (let i = 0; i < lagrangeDatas.length; i++) {
-    const lagrangeData = lagrangeDatas[i];
-    const input = inputs[i];
-
-    const currentSnapshotVotes = (proposal.scores[input.choiceIndex - 1] || 0);
-    const totalVlCvxVotes = currentSnapshotVotes - input.voterCvxCurrentVotes + lagrangeData.xi
-    const totalVecrvVotes = input.currentNonBlacklistedVeCrvVotes - input.currentConvexVeCrvVotes + totalVlCvxVotes * roundData.crvPerCvx;
-    let bribeRewardsUSD = 0;
-    if (input.platform === "votium") {
-      bribeRewardsUSD = input.depositedRewardsUSD;
-    } else {
-      bribeRewardsUSD = Math.min(2, input.remainingDuration) * input.depositedRewardsUSD;
-    }
-
-    const usdPervecrv = totalVecrvVotes === 0 ? 0 : Math.min(bribeRewardsUSD / totalVecrvVotes, 1);
-    const usdPerVlCvx = usdPervecrv * roundData.crvPerCvx;
-    input.earnings += usdPerVlCvx * lagrangeData.xi;
+    inputs[i].earnings += getProfit(inputs[i], lagrangeDatas[i], proposal, roundData);
   }
 
   lagrangeDatas.sort((a, b) => a.xi - b.xi);
@@ -436,6 +268,22 @@ async function compute(
   console.log("totalEarnings", totalEarnings)
   fs.writeFileSync("./lagrangeDatas.json", JSON.stringify(lagrangeDatas.reverse().map((l) => ({weight: l.xi, name: l.gaugeName, gauge: l.gaugeAddress}))), {encoding: 'utf-8'});
   return lagrangeDatas.filter((lagrange) => lagrange.xi > 0);
+}
+
+const getProfit = (input: Input, lagrangeData: LagrangeInput, proposal: ISnapshotProposal, roundData: IVotemarketBribe): number => {
+  const currentSnapshotVotes = (proposal.scores[input.choiceIndex - 1] || 0);
+  const totalVlCvxVotes = currentSnapshotVotes - input.voterCvxCurrentVotes + lagrangeData.xi
+  const totalVecrvVotes = input.currentNonBlacklistedVeCrvVotes - input.currentConvexVeCrvVotes + totalVlCvxVotes * roundData.crvPerCvx;
+  let bribeRewardsUSD = 0;
+  if (input.platform === "votium") {
+    bribeRewardsUSD = input.depositedRewardsUSD;
+  } else {
+    bribeRewardsUSD = Math.min(2, input.remainingDuration) * input.depositedRewardsUSD;
+  }
+
+  const usdPervecrv = totalVecrvVotes === 0 ? 0 : Math.min(bribeRewardsUSD / totalVecrvVotes, 1);
+  const usdPerVlCvx = usdPervecrv * roundData.crvPerCvx;
+  return usdPerVlCvx * lagrangeData.xi;
 }
 
 export async function get_choices_with_votemarket(
@@ -460,16 +308,16 @@ export async function get_choices_with_votemarket(
   if (voteConfig) force = true;
 
   // Fetch votemarket analytics
-  /*const { data: response } = await axios.get<IVotemarketBribeResponse>(
+  const { data: response } = await axios.get<Record<string, any>>(
     `https://raw.githubusercontent.com/stake-dao/votemarket-analytics/refs/heads/main/analytics/votemarket-vlcvx-analytics.json`,
     {
       headers: {
         "content-type": "application/json; charset=utf-8",
       },
     }
-  );*/
+  );
 
-  const response =  JSON.parse(fs.readFileSync(`${directory}/${protocol}/vlcvx.json`).toString()) as any;
+  //const response =  JSON.parse(fs.readFileSync(`${directory}/${protocol}/vlcvx.json`).toString()) as any;
 
   const roundData = response[round];
   assert.ok(roundData !== undefined, "round mismatch");

@@ -8,150 +8,17 @@ import Table from "tty-table";
 import snapshot from "@snapshot-labs/snapshot.js";
 import { JsonRpcProvider } from "@ethersproject/providers";
 import { Wallet } from "@ethersproject/wallet";
+import { ISnapshotProposal, ISnapshotProposalResponse, ISnapshotVote, ISnapshotVotes, ISnapshotVotesResponse } from "scripts/interfaces/snapshot";
+import { IVotiumBribe, IVotiumBribeResponse } from "scripts/interfaces/votium";
+import { fetchVotes } from "scripts/snapshot/snapshotVotes";
 
 const directory = ".store/vlcvx";
 
 const program = new Command();
 program.version("1.0.0");
 
-export declare type ProposalType = "single-choice" | "approval" | "quadratic" | "ranked-choice" | "weighted" | "basic";
-
-interface ISnapshotVote {
-  from?: string;
-  space: string;
-  timestamp?: number;
-  proposal: string;
-  type: ProposalType;
-  choice:
-    | number
-    | number[]
-    | string
-    | {
-        [key: string]: number;
-      };
-  privacy?: string;
-  reason?: string;
-  app?: string;
-  metadata?: string;
-}
-
-interface ISnapshotProposal {
-  author: string;
-  body: string;
-  choices: string[];
-  created: number;
-  discussion: string;
-  end: number;
-  id: string;
-  ipfs: string;
-  network: string;
-  plugins: {};
-  privacy: string;
-  quorum: number;
-  scores: number[];
-  scores_by_strategy: number[][];
-  scores_state: string;
-  scores_total: number;
-  snapshot: string;
-  space: {
-    id: string;
-    name: string;
-  };
-  start: number;
-  state: string;
-  strategies: {
-    name: string;
-    network: string;
-    params: {
-      symbol: string;
-      address: string;
-      decimals: number;
-    };
-  }[];
-  symbol: string;
-  title: string;
-  type: string;
-  validation: {
-    name: string;
-    params: {};
-  };
-  votes: number;
-}
-
-interface ISnapshotProposalResponse {
-  data: {
-    proposal: ISnapshotProposal;
-  };
-}
-
-interface ISnapshotVotes {
-  choice: { [id: number]: number };
-  created: number;
-  ipfs: string;
-  reason: string;
-  voter: string;
-  vp: number;
-  vp_by_strategy: number[];
-}
-
-interface ISnapshotVotesResponse {
-  data: {
-    votes: ISnapshotVotes[];
-  };
-}
-
-interface IVotiumBribe {
-  platform: string;
-  proposal: string;
-  protocol: string;
-  round: number;
-  end: number;
-  bribes: {
-    amount: number;
-    amountDollars: number;
-    pool: string;
-    token: string;
-  }[];
-  bribed: { [pool: string]: number };
-}
-
-interface IVotiumBribeResponse {
-  success: boolean;
-  epoch: IVotiumBribe;
-}
-
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchVotes(proposalId: string, users: number): Promise<ISnapshotVotes[]> {
-  const batchSize = 100;
-  const votes: ISnapshotVotes[] = [];
-  for (let skip = 0; skip < users; skip += batchSize) {
-    const response = await axios.post<ISnapshotVotesResponse>(
-      "https://hub.snapshot.org/graphql",
-      JSON.stringify({
-        operationName: "Votes",
-        variables: {
-          first: batchSize,
-          orderBy: "vp",
-          orderDirection: "desc",
-          skip,
-          id: proposalId,
-        },
-        query:
-          "query Votes($id: String!, $first: Int, $skip: Int, $orderBy: String, $orderDirection: OrderDirection, $voter: String, $space: String) {\n  votes(\n    first: $first\n    skip: $skip\n    where: {proposal: $id, vp_gt: 0, voter: $voter, space: $space}\n    orderBy: $orderBy\n    orderDirection: $orderDirection\n  ) {\n    ipfs\n    voter\n    choice\n    vp\n    vp_by_strategy\n    reason\n    created\n  }\n}",
-      }),
-      {
-        headers: {
-          "content-type": "application/json",
-        },
-      }
-    );
-    votes.push(...response.data.data.votes);
-  }
-
-  return votes;
 }
 
 function compute(
