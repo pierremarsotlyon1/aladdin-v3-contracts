@@ -243,10 +243,13 @@ async function compute(
 
     const sumSi = lagrangeDatas.reduce((acc: number, lagrangeData) => acc + lagrangeData.si, 0);
     const sumSqrt = lagrangeDatas.reduce((acc: number, lagrangeData) => acc + lagrangeData.sqrt, 0);
-
+    
     for (let a = 0; a < inputs.length; a++) {
       const lagrangeData = lagrangeDatas[a];
       lagrangeData.xi = (((sumSi + totalVotesSum) * lagrangeData.sqrt) / sumSqrt) - lagrangeData.si;
+      if (isNaN(lagrangeData.xi)) {
+        lagrangeData.xi = 0;
+      }
 
       // If profit < min profit => remove bribe
       if(getProfit(inputs[a], lagrangeData, proposal, roundData) < minProfitUSD) {
