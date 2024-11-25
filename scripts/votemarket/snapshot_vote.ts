@@ -239,6 +239,9 @@ async function compute(
       }
 
       lagrangeData.sqrt = Math.sqrt(lagrangeData.bi * lagrangeData.si);
+      if(isNaN(lagrangeData.sqrt) || lagrangeData.sqrt === null || lagrangeData.sqrt < 0) {
+        lagrangeData.sqrt = 0;
+      }
     }
 
     const sumSi = lagrangeDatas.reduce((acc: number, lagrangeData) => acc + lagrangeData.si, 0);
